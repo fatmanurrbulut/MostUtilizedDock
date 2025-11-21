@@ -11,7 +11,6 @@ from src.sequential import sequential_best_row
 from src.dac import dac_best_row
 
 
-
 def load_matrix(path: str) -> np.ndarray:
     if not os.path.exists(path):
         raise FileNotFoundError(f"Data file not found: {path}")
@@ -31,6 +30,10 @@ def load_matrix(path: str) -> np.ndarray:
 
 
 def parse_sizes(size_spec: str, R: int, T: int):
+    """
+    Size string'ini (R:...,T:...) formatından listeye çevirir.
+    Örn: "R:all,T:all|R:half,T:all|R:10,T:all"
+    """
     sizes = []
     if not size_spec:
         # Default: sadece full matrix
@@ -52,6 +55,7 @@ def parse_sizes(size_spec: str, R: int, T: int):
             key, value = p.split(":")
             kv[key.strip().upper()] = value.strip().lower()
 
+        # R
         r_token = kv.get("R", "all")
         if r_token == "all":
             R_sub = R
@@ -60,6 +64,7 @@ def parse_sizes(size_spec: str, R: int, T: int):
         else:
             R_sub = min(R, int(r_token))
 
+        # T
         t_token = kv.get("T", "all")
         if t_token == "all":
             T_sub = T
@@ -70,11 +75,16 @@ def parse_sizes(size_spec: str, R: int, T: int):
 
         sizes.append((R_sub, T_sub))
 
+    # Tekrarlayanları at
     sizes = list(dict.fromkeys(sizes))
     return sizes
 
 
 def run_timings(U_full: np.ndarray, repeats: int, sizes, csv_path: str):
+    """
+    Verilen boyutlar için sequential ve D&C'yi tekrar tekrar çalıştırıp
+    sonuçları CSV'ye yazar.
+    """
     R, T = U_full.shape
 
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
@@ -89,6 +99,7 @@ def run_timings(U_full: np.ndarray, repeats: int, sizes, csv_path: str):
 
             U = U_full[:R_sub, :T_sub]
 
+            # Önce doğru sonuç veriyorlar mı kontrol et
             row_s, cnt_s = sequential_best_row(U)
             row_d, cnt_d = dac_best_row(U)
 
@@ -98,6 +109,7 @@ def run_timings(U_full: np.ndarray, repeats: int, sizes, csv_path: str):
                     f"seq=({row_s}, {cnt_s}), dac=({row_d}, {cnt_d})"
                 )
 
+            # Zaman ölçümleri
             for r in range(repeats):
                 t0 = time.perf_counter()
                 _ = sequential_best_row(U)
@@ -111,31 +123,60 @@ def run_timings(U_full: np.ndarray, repeats: int, sizes, csv_path: str):
 
 
 def plot_runtime(csv_path: str, out_path: str):
+    """
+    timings.csv'den verileri okuyup
+    Runtime vs Input Size (Sequential vs D&C) grafiğini üretir.
+    """
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"Timing CSV not found: {csv_path}")
 
     df = pd.read_csv(csv_path)
 
+    # Toplam input boyutu
     df["N"] = df["R"] * df["T"]
 
-    grouped = df.groupby(["method", "N"])["seconds"].mean().reset_index()
+    # Ortalama süre (saniye) -> milisaniye
+    grouped = (
+        df.groupby(["method", "N"])["seconds"]
+        .mean()
+        .reset_index()
+        .sort_values("N")
+    )
+    grouped["ms"] = grouped["seconds"] * 1000.0
 
-    plt.figure()
+    plt.figure(figsize=(8, 4.5))
+
     for method in grouped["method"].unique():
         sub = grouped[grouped["method"] == method]
-        plt.plot(sub["N"], sub["seconds"], marker="o", label=method)
 
-    plt.xlabel("Input size N = R * T")
-    plt.ylabel("Average runtime (seconds)")
-    plt.title("Runtime vs Input Size (Sequential vs D&C)")
-    plt.legend()
+        if method == "sequential":
+            label = "Sequential"
+            plt.plot(
+                sub["N"],
+                sub["ms"],
+                marker="o",
+                linestyle="-",
+                label=label,
+            )
+        else:
+            label = "Divide & Conquer"
+            plt.plot(
+                sub["N"],
+                sub["ms"],
+                marker="x",
+                linestyle="--",
+                label=label,
+            )
+
+    plt.xlabel("Input Size (R × T)")
+    plt.ylabel("Runtime (ms)")
+    plt.title("Performance Comparison: Sequential vs D&C")
     plt.grid(True, alpha=0.3)
+    plt.legend()
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close()
-
-
 
 
 def main():
@@ -148,14 +189,15 @@ def main():
     parser.add_argument(
         "--repeats",
         type=int,
-        default=10,
-        help="Number of repeats per configuration (default: 10)",
+        default=50,  # biraz yüksek tutalım ki ortalama düzgün olsun
+        help="Number of repeats per configuration (default: 50)",
     )
     parser.add_argument(
         "--sizes",
         type=str,
-        default="R:all,T:all|R:half,T:all|R:all,T:half",
-        help='Size specs, e.g. "R:all,T:all|R:half,T:all|R:all,T:half"',
+        # Daha çok nokta olsun diye birkaç ekstra boyut ekledim
+        default="R:10,T:all|R:20,T:all|R:half,T:all|R:all,T:all",
+        help='Size specs, e.g. "R:all,T:all|R:half,T:all|R:10,T:all"',
     )
 
     args = parser.parse_args()
