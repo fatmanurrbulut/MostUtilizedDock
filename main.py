@@ -1,6 +1,7 @@
 import os
-from src.data_prep import events_to_matrix, summarize_matrix
+from src.data_prep import events_to_matrix, summarize_matrix, save_info
 from src.sequential import sequential_best_row
+from src.dac import dac_best_row
 from src.plots_basic import save_heatmap, save_bar_chart
 
 def main():
@@ -9,6 +10,7 @@ def main():
     input_csv = os.path.join(base_dir, "data","dock_events_raw_sample.csv")
     output_heatmap = os.path.join(base_dir, "plots", "heatmap.png")
     output_barchart = os.path.join(base_dir, "plots", "bar_chart.png")
+    output_info = os.path.join(base_dir, "data", "info.json")
     
     delta_mins = 5
     
@@ -37,7 +39,27 @@ def main():
         
     print(f"   -> Toplam {max_count} slot boyunca dolu kaldı.")
 
-    print("\n3. Grafikler çiziliyor...")
+    print("\n3. Divide-and-Conquer Algoritma çalışıyor...")
+    best_idx_dac, max_count_dac = dac_best_row(U)
+    
+    if docks:
+        best_dock_name_dac = docks[best_idx_dac]
+        print(f"   -> SONUÇ: En yoğun iskele: {best_dock_name_dac} (ID: {best_idx_dac})")
+    else:
+        print(f"   -> SONUÇ: En yoğun iskele ID: {best_idx_dac}")
+        
+    print(f"   -> Toplam {max_count_dac} slot boyunca dolu kaldı.")
+    
+    # Sonuçların eşleştiğini doğrula
+    if best_idx == best_idx_dac and max_count == max_count_dac:
+        print("\n   ✓ Her iki algoritma da aynı sonucu verdi!")
+    else:
+        print("\n   ✗ UYARI: Algoritmalar farklı sonuçlar verdi!")
+
+    print("\n4. Meta bilgisi kaydediliyor...")
+    save_info(U, delta_mins, output_info)
+
+    print("\n5. Grafikler çiziliyor...")
     save_heatmap(U, output_heatmap)
     # Docks listesini etiket olarak gönderiyoruz
     save_bar_chart(U, output_barchart, best_dock_idx=best_idx, dock_labels=docks)

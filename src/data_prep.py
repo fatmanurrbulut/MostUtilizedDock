@@ -1,5 +1,7 @@
 import pandas as pd
 import numpy as np
+import json
+import os
 from datetime import datetime
 
 def build_time_grid(day_start, day_end, delta_minutes):
@@ -72,3 +74,33 @@ def summarize_matrix(U):
         "ones": total_ones,
         "sparsity": sparsity
     }
+
+
+def save_info(U, delta_minutes, output_path="data/info.json"):
+    """
+    Matris meta bilgilerini JSON dosyasına kaydeder.
+    
+    Args:
+        U: Occupancy matrix (R×T)
+        delta_minutes: Zaman slot uzunluğu (dakika)
+        output_path: JSON dosyasının kaydedileceği yol
+    
+    Returns:
+        dict: Kaydedilen meta bilgisi
+    """
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    summary = summarize_matrix(U)
+    info = {
+        "R": summary["R"],
+        "T": summary["T"],
+        "ones": summary["ones"],
+        "sparsity": round(summary["sparsity"], 4),
+        "delta": delta_minutes
+    }
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(info, f, indent=2, ensure_ascii=False)
+    
+    print(f"Meta bilgisi kaydedildi: {output_path}")
+    return info

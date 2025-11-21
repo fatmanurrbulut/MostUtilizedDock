@@ -16,12 +16,12 @@ def load_matrix(path: str) -> np.ndarray:
     if not os.path.exists(path):
         raise FileNotFoundError(f"Data file not found: {path}")
 
+    # Pandas ile oku (header ve index kolonunu handle etmek için)
     try:
-        # Header yoksa direkt okur
-        U = np.loadtxt(path, delimiter=",", dtype=int)
-    except ValueError:
-        # Header varsa ilk satırı atla
-        U = np.loadtxt(path, delimiter=",", dtype=int, skiprows=1)
+        df = pd.read_csv(path, index_col=0, encoding='utf-8-sig')
+        U = df.values.astype(int)
+    except Exception as e:
+        raise ValueError(f"Error loading matrix from {path}: {e}")
 
     if U.ndim == 1:
         # Tek satırlı matris durumunda shape'i (1, T) yap
