@@ -12,18 +12,24 @@ from src.dac import dac_best_row
 
 
 def load_matrix(path: str) -> np.ndarray:
+    """
+    Loads the occupancy matrix from a CSV file.
+
+    In the report, this is the matrix U (R x T).
+    We use pandas here so we can easily ignore the first index column in the CSV.
+    """
     if not os.path.exists(path):
         raise FileNotFoundError(f"Data file not found: {path}")
 
-    # Pandas ile oku (header ve index kolonunu handle etmek için)
+    # Read with pandas so we can drop index column easily
     try:
         df = pd.read_csv(path, index_col=0, encoding='utf-8-sig')
         U = df.values.astype(int)
     except Exception as e:
         raise ValueError(f"Error loading matrix from {path}: {e}")
 
+    # If there is only one row, make sure shape is (1, T) not (T,)
     if U.ndim == 1:
-        # Tek satırlı matris durumunda shape'i (1, T) yap
         U = U.reshape(1, -1)
 
     return U
@@ -31,12 +37,19 @@ def load_matrix(path: str) -> np.ndarray:
 
 def parse_sizes(size_spec: str, R: int, T: int):
     """
-    Size string'ini (R:...,T:...) formatından listeye çevirir.
-    Örn: "R:all,T:all|R:half,T:all|R:10,T:all"
+    Parses the size specification string into a list of (R_sub, T_sub) pairs.
+
+    The format is something like:
+        "R:all,T:all|R:half,T:all|R:10,T:all"
+
+    - R:all  -> use all rows
+    - R:half -> use half of the rows
+    - R:10   -> use min(10, R)
+    Same idea for T.
     """
     sizes = []
     if not size_spec:
-        # Default: sadece full matrix
+        # Default: only test on the full matrix
         sizes.append((R, T))
         return sizes
 
@@ -48,6 +61,8 @@ def parse_sizes(size_spec: str, R: int, T: int):
 
         parts = chunk.split(",")
         kv = {}
+
+        # Parse key:value pairs like "R:all", "T:half"
         for p in parts:
             p = p.strip()
             if not p:
@@ -55,7 +70,7 @@ def parse_sizes(size_spec: str, R: int, T: int):
             key, value = p.split(":")
             kv[key.strip().upper()] = value.strip().lower()
 
-        # R
+        # --- R part ---
         r_token = kv.get("R", "all")
         if r_token == "all":
             R_sub = R
@@ -64,7 +79,7 @@ def parse_sizes(size_spec: str, R: int, T: int):
         else:
             R_sub = min(R, int(r_token))
 
-        # T
+        # --- T part ---
         t_token = kv.get("T", "all")
         if t_token == "all":
             T_sub = T
@@ -75,15 +90,20 @@ def parse_sizes(size_spec: str, R: int, T: int):
 
         sizes.append((R_sub, T_sub))
 
-    # Tekrarlayanları at
+    # Remove duplicates while keeping order
     sizes = list(dict.fromkeys(sizes))
     return sizes
 
 
 def run_timings(U_full: np.ndarray, repeats: int, sizes, csv_path: str):
     """
-    Verilen boyutlar için sequential ve D&C'yi tekrar tekrar çalıştırıp
-    sonuçları CSV'ye yazar.
+    For each (R_sub, T_sub) configuration:
+      - take a submatrix of U_full
+      - check that sequential_best_row and dac_best_row give the same result
+      - measure their runtimes multiple times
+      - write all timing data into a CSV file
+
+    This function basically generates the data for our performance plot.
     """
     R, T = U_full.shape
 
@@ -94,12 +114,14 @@ def run_timings(U_full: np.ndarray, repeats: int, sizes, csv_path: str):
         writer.writerow(["method", "R", "T", "repeat", "seconds"])
 
         for (R_sub, T_sub) in sizes:
+            # Skip if the requested size is bigger than the original matrix
             if R_sub > R or T_sub > T:
                 continue
 
+            # Take the top-left submatrix
             U = U_full[:R_sub, :T_sub]
 
-            # Önce doğru sonuç veriyorlar mı kontrol et
+            # First check correctness: both algorithms must agree
             row_s, cnt_s = sequential_best_row(U)
             row_d, cnt_d = dac_best_row(U)
 
@@ -109,13 +131,15 @@ def run_timings(U_full: np.ndarray, repeats: int, sizes, csv_path: str):
                     f"seq=({row_s}, {cnt_s}), dac=({row_d}, {cnt_d})"
                 )
 
-            # Zaman ölçümleri
+            # If they agree, measure runtime
             for r in range(repeats):
+                # Sequential timing
                 t0 = time.perf_counter()
                 _ = sequential_best_row(U)
                 t1 = time.perf_counter()
                 writer.writerow(["sequential", R_sub, T_sub, r, t1 - t0])
 
+                # D&C timing
                 t0 = time.perf_counter()
                 _ = dac_best_row(U)
                 t1 = time.perf_counter()
@@ -124,18 +148,21 @@ def run_timings(U_full: np.ndarray, repeats: int, sizes, csv_path: str):
 
 def plot_runtime(csv_path: str, out_path: str):
     """
-    timings.csv'den verileri okuyup
-    Runtime vs Input Size (Sequential vs D&C) grafiğini üretir.
+    Reads the timing CSV and creates a runtime vs input size plot.
+
+    The x-axis shows N = R × T (total number of cells),
+    the y-axis shows average runtime in milliseconds,
+    and we plot both Sequential and Divide & Conquer curves.
     """
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"Timing CSV not found: {csv_path}")
 
     df = pd.read_csv(csv_path)
 
-    # Toplam input boyutu
+    # Total input size for each configuration
     df["N"] = df["R"] * df["T"]
 
-    # Ortalama süre (saniye) -> milisaniye
+    # Group by method and N, then take the mean time → convert to ms
     grouped = (
         df.groupby(["method", "N"])["seconds"]
         .mean()
@@ -146,6 +173,7 @@ def plot_runtime(csv_path: str, out_path: str):
 
     plt.figure(figsize=(8, 4.5))
 
+    # Draw a separate line for each method
     for method in grouped["method"].unique():
         sub = grouped[grouped["method"] == method]
 
@@ -180,7 +208,20 @@ def plot_runtime(csv_path: str, out_path: str):
 
 
 def main():
+    """
+    Command-line entry point for running timing experiments.
+
+    Example usage:
+        python run_experiment.py --data data/occupancy.csv
+
+    This will:
+      - load the matrix
+      - run timings for different sizes
+      - write results to results/timings.csv
+      - generate plots/runtime_vs_size.png
+    """
     parser = argparse.ArgumentParser(description="Run timing experiments for HW2.")
+
     parser.add_argument(
         "--data",
         required=True,
@@ -189,30 +230,35 @@ def main():
     parser.add_argument(
         "--repeats",
         type=int,
-        default=50,  # biraz yüksek tutalım ki ortalama düzgün olsun
+        # Slightly higher so the average is more stable
+        default=50,
         help="Number of repeats per configuration (default: 50)",
     )
     parser.add_argument(
         "--sizes",
         type=str,
-        # Daha çok nokta olsun diye birkaç ekstra boyut ekledim
+        # Multiple sizes so we get more points in the graph
         default="R:10,T:all|R:20,T:all|R:half,T:all|R:all,T:all",
         help='Size specs, e.g. "R:all,T:all|R:half,T:all|R:10,T:all"',
     )
 
     args = parser.parse_args()
 
+    # 1) Load matrix from CSV
     U_full = load_matrix(args.data)
     R, T = U_full.shape
     print(f"Loaded matrix with shape R={R}, T={T}")
 
+    # 2) Parse the size configurations
     sizes = parse_sizes(args.sizes, R, T)
     print("Sizes to test:", sizes)
 
+    # 3) Run timing experiments and save raw data
     csv_path = "results/timings.csv"
     run_timings(U_full, args.repeats, sizes, csv_path)
     print(f"Timing results written to {csv_path}")
 
+    # 4) Create the runtime vs size plot
     out_plot = "plots/runtime_vs_size.png"
     plot_runtime(csv_path, out_plot)
     print(f"Runtime plot saved to {out_plot}")
